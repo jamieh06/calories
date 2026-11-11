@@ -2767,6 +2767,31 @@ const views = (() => {
   if (log.info().state === 'off') openSignIn();
 })();
 
+/* ---------- a newer page: the Dock app stays open for days, so it looks for one and reloads itself ----------
+   On focus (ten minutes apart at most) it asks the server when the page last changed. Newer than the copy on
+   screen: reload, once for each new version, so a stale cache can never make it loop. */
+(() => {
+  if (SEED || !/^https?:$/.test(location.protocol)) return;
+  const mine = Date.parse(document.lastModified);
+  let last = 0;
+  async function check() {
+    if (document.hidden || Date.now() - last < 600e3) return;
+    last = Date.now();
+    try {
+      const r = await fetch(location.pathname, { method: 'HEAD', cache: 'no-store' });
+      const theirs = Date.parse(r.headers.get('last-modified') || '');
+      if (!r.ok || !(theirs > mine + 2000)) return;
+      let done = ''; try { done = sessionStorage.getItem('ct-reloaded') || ''; } catch {}
+      if (done === String(theirs)) return;
+      try { sessionStorage.setItem('ct-reloaded', String(theirs)); } catch { return; }
+      location.reload();
+    } catch {}
+  }
+  addEventListener('focus', check);
+  document.addEventListener('visibilitychange', check);
+  setTimeout(check, 3000);
+})();
+
 (document.fonts?.ready || Promise.resolve()).then(() => glass.refresh());
 </script>
 </body>
