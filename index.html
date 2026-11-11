@@ -434,6 +434,10 @@ svg.ic--fill { fill: currentColor; stroke: none; }
 .hero { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "day" "gauge" "macros"; justify-items: center; }
 .day { grid-area: day; justify-self: stretch; margin: 0 0 12px; }
 .day__title { margin: 0; font-size: 26px; font-weight: 700; line-height: 32px; letter-spacing: -0.02em; }
+.day__back { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 6px -2px; padding: 3px 9px 3px 6px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 16px; color: var(--accent); text-decoration: none; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.day__back .ic { width: 14px; height: 14px; }
+.day__back:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.day__back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .day__date { margin: 1px 0 0; font-size: 13px; line-height: 16px; color: var(--text-2); }
 
 /* the ring: kcal so far against maintenance, one arc per meal in the meal's colour, the rest is what's left */
@@ -768,6 +772,11 @@ svg.ic--fill { fill: currentColor; stroke: none; }
 .heat__day.is-under { --hue: var(--cell-under); }
 .heat__day.is-today { color: var(--text-1); box-shadow: inset 0 0 0 var(--today-w, 2px) var(--today-ring, rgba(0, 0, 0, .5)); }   /* light: a firm ring, not the heaviest line on the sheet */
 .heat__day.is-empty.is-today { color: var(--text-2); box-shadow: inset 0 0 0 2px var(--text-2); }   /* today, nothing logged yet */
+/* a logged square is a link to that day: the link lies over the whole square */
+.heat__go { position: absolute; inset: 0; border-radius: inherit; cursor: pointer; transition: box-shadow 160ms var(--ease-snap), background-color 160ms var(--ease-snap); }
+.heat__go:hover { background: color-mix(in srgb, var(--text-1) 8%, transparent); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--text-1) 45%, transparent); }
+.heat__go:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.heat__go:active { background: color-mix(in srgb, var(--text-1) 16%, transparent); }
 .heat__date { font-size: 13px; font-weight: 600; line-height: 16px; white-space: nowrap; overflow: hidden; }
 .heat__kcal .k-short { display: none; }
 .heat__kcal { font-size: clamp(15px, 2.6cqi, 22px); font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; white-space: nowrap; }
@@ -1867,7 +1876,8 @@ function macroSplit(p, c, f) {
   if (off) pct[pct.indexOf(Math.max(...pct))] += off;   // shares add up to 100
   return { protein: { g: Math.round(p), pct: pct[0] }, carbs: { g: Math.round(c), pct: pct[1] }, fat: { g: Math.round(f), pct: pct[2] } };
 }
-function buildModel(raw, today) {
+function buildModel(raw, today, viewDay = null) {
+  if (!viewDay || viewDay >= today) viewDay = null;   // a past day picked in History; null is today
   const set = (raw.settings || [])[0];
   const setKcal = numOr(set && set.maintenance_kcal);
   const maint = setKcal || MAINT_DEFAULT, estimate = !setKcal;
@@ -1883,7 +1893,7 @@ function buildModel(raw, today) {
   const loggedDays = [...days.keys()].sort();
 
   const weekFrom = addDays(today, -6);
-  const food = (raw.food || []).filter(r => r && r.day >= weekFrom && r.day <= today).map(r => ({
+  const foodRow = r => ({
     day: r.day,
     meal: MEALS_ALL.includes(r.meal) ? r.meal : 'snacks',
     time: r.eaten_at ? String(r.eaten_at).slice(0, 5) : '',          // REST gives "HH:MM:SS"
@@ -1891,9 +1901,15 @@ function buildModel(raw, today) {
     kcal: numOr(r.kcal, 0), p: numOr(r.protein_g), c: numOr(r.carbs_g), f: numOr(r.fat_g),
     source: r.source ? String(r.source).trim() : '', icon: iconKey(r.icon),
     notes: r.notes ? String(r.notes).trim() : '', created: String(r.created_at || ''),
-  }));
+  });
+  const food = (raw.food || []).filter(r => r && r.day >= weekFrom && r.day <= today).map(foodRow);
   const byTime = (a, b) => (a.time ? 0 : 1) - (b.time ? 0 : 1) || a.time.localeCompare(b.time) || a.created.localeCompare(b.created);
-  const todayFood = food.filter(r => r.day === today).sort(byTime);
+  // the day on the Today screen: today, or the day picked in History. The week's food is already here; an older
+  // day's comes with its own read (raw.dayFood), and until it lands the ring is drawn from that day's totals.
+  const shown = viewDay || today;
+  const older = viewDay && viewDay < weekFrom;
+  const loading = older && !(raw.dayFood && raw.dayFood.day === viewDay);
+  const todayFood = (older ? (loading ? [] : (raw.dayFood.rows || []).filter(r => r && r.day === viewDay).map(foodRow)) : food.filter(r => r.day === shown)).sort(byTime);
 
   // Today: each meal's items in time order, its first time, and a note they all share (e.g. "Tesco meal deal")
   const meals = MEALS_ALL.map(m => {
@@ -1903,7 +1919,12 @@ function buildModel(raw, today) {
     return { meal: m, items, kcal: items.reduce((s, r) => s + r.kcal, 0), time: times[0] || '', note: notes.size === 1 && items[0]?.notes || '' };
   });
   const sum = (rows, k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
-  const todayView = { meals, total: sum(todayFood, 'kcal'), count: todayFood.length, macros: macroSplit(sum(todayFood, 'p'), sum(todayFood, 'c'), sum(todayFood, 'f')) };
+  const todayView = { day: shown, past: !!viewDay, loading: false, meals, total: sum(todayFood, 'kcal'), count: todayFood.length, macros: macroSplit(sum(todayFood, 'p'), sum(todayFood, 'c'), sum(todayFood, 'f')) };
+  if (loading) {
+    const row = days.get(viewDay);
+    todayView.loading = true;
+    if (row) { meals.forEach(m => { m.kcal = row.meals[m.meal] || 0; }); todayView.total = row.kcal; todayView.count = 1; todayView.macros = macroSplit(row.p, row.c, row.f); }
+  }
 
   // This Week: the 7 days to today; not-logged days stay in the chart as gaps
   const weekDays = [];
@@ -1991,9 +2012,10 @@ const renderViews = (() => {
     }).join('');
     const rest = over ? total - maint : maint - total;
     const mealsSaid = arcs.map((m, i) => `${i ? MEAL_NAME[m.meal].toLowerCase() : MEAL_NAME[m.meal]} ${n(m.kcal)}`).join(', ');
+    const past = T.past, day = T.day;
     const said = T.count
-      ? `${n(total)} of ${n(maint)} kcal so far, ${n(rest)} ${over ? 'over' : 'left'}.${mealsSaid ? ' ' + mealsSaid + '.' : ''}`
-      : `Nothing logged yet: 0 of ${n(maint)} kcal, ${n(maint)} left.`;
+      ? `${n(total)} of ${n(maint)} kcal${past ? '' : ' so far'}, ${n(rest)} ${over ? 'over' : past ? 'under' : 'left'}.${mealsSaid ? ' ' + mealsSaid + '.' : ''}`
+      : past ? `Nothing logged: 0 of ${n(maint)} kcal.` : `Nothing logged yet: 0 of ${n(maint)} kcal, ${n(maint)} left.`;
     const M = T.macros;
 
     const tile = (r, wide) => {
@@ -2012,7 +2034,7 @@ const renderViews = (() => {
       const head = `<h3 class="meal__head" id="h-${m.meal}"><span class="meal__dot" aria-hidden="true"></span>${MEAL_NAME[m.meal]}`;
       if (!m.items.length) return `<section class="meal meal--${m.meal}" id="meal-${m.meal}" aria-labelledby="h-${m.meal}">
               ${head}</h3>
-              <div class="tiles"><div class="tile tile--wide tile--empty"><span class="food__icon food__icon--empty" aria-hidden="true"><svg viewBox="0 0 40 40">${EMPTY_PLATE}</svg></span><span class="tile__name">Nothing yet. Tell Claude what you had.</span></div></div>
+              <div class="tiles"><div class="tile tile--wide tile--empty"><span class="food__icon food__icon--empty" aria-hidden="true"><svg viewBox="0 0 40 40">${EMPTY_PLATE}</svg></span><span class="tile__name">${past ? 'Nothing logged.' : 'Nothing yet. Tell Claude what you had.'}</span></div></div>
             </section>`;
       const sub = [m.time, m.note].filter(Boolean).join(' · ');
       return `<section class="meal meal--${m.meal}" id="meal-${m.meal}" aria-labelledby="h-${m.meal}">
@@ -2020,7 +2042,9 @@ const renderViews = (() => {
               <ul class="tiles">${m.items.map((r, i) => tile(r, i === 0 && m.items.length % 2 === 1)).join('')}</ul>
             </section>`;
     };
-    const food = T.count
+    const food = T.loading ? emptyNote('Loading this day’s food…')
+      : past && !T.count ? emptyNote('Nothing was logged on this day.')
+      : T.count
       ? T.meals.filter(m => m.meal !== 'drinks' || m.items.length).map(mealSec).join('')
       : `<div class="day-empty">
               <ul class="day-empty__meals" aria-hidden="true">${MEALS.map(m => `<li><span class="app-icon app-icon--${m}"><svg viewBox="0 0 40 40">${DOCK_ICONS[m]}</svg></span></li>`).join('')}</ul>
@@ -2032,13 +2056,13 @@ const renderViews = (() => {
     el.dataset.hint = T.count ? 'Each tile fills as far as its kcal goes; a full tile is 500.' : 'Food you tell Claude shows up here within a minute.';
     el.innerHTML = `
           <section class="hero${T.count ? '' : ' hero--empty'}" aria-labelledby="day-title">
-            <header class="day"><h1 class="day__title" id="day-title">Today</h1><p class="day__date">${esc(dLong(today))}</p></header>
-            <div class="gauge" role="meter" aria-valuemin="0" aria-valuemax="${scale}" aria-valuenow="${total}" aria-label="Calories today" aria-valuetext="${esc(said)}">
+            <header class="day">${past ? `<a class="day__back" href="#history">${icon('i-history')}History</a>` : ''}<h1 class="day__title" id="day-title">${past ? esc(day === addDays(today, -1) ? 'Yesterday' : part(day, { weekday: 'long' })) : 'Today'}</h1><p class="day__date">${esc(past ? `${dMonth(day)} ${date(day).getFullYear()}` : dLong(day))}</p></header>
+            <div class="gauge" role="meter" aria-valuemin="0" aria-valuemax="${scale}" aria-valuenow="${total}" aria-label="${past ? 'Calories that day' : 'Calories today'}" aria-valuetext="${esc(said)}">
               <svg class="gauge__ring" viewBox="0 0 240 240" aria-hidden="true"><circle class="gauge__track" cx="120" cy="120" r="110"></circle>${segs}</svg>
               <div class="gauge__centre" aria-hidden="true">
                 <span class="gauge__num">${n(total)}</span>
                 <span class="gauge__of">of ${n(maint)} kcal</span>
-                <span class="gauge__left"><b>${n(rest)}</b>${over ? 'over' : 'left'}</span>
+                <span class="gauge__left"><b>${n(rest)}</b>${over ? 'over' : past ? 'under' : 'left'}</span>
               </div>
             </div>
             <section class="macros" aria-labelledby="mac-h">
@@ -2050,7 +2074,7 @@ const renderViews = (() => {
             </section>
           </section>
           <section class="foodgrid" aria-labelledby="fg-h">
-            <h2 class="visually-hidden" id="fg-h">Meals today</h2>
+            <h2 class="visually-hidden" id="fg-h">${past ? 'Meals that day' : 'Meals today'}</h2>
             ${food}
           </section>`;
   }
@@ -2265,6 +2289,7 @@ const renderViews = (() => {
     const tint = k => (Math.min(4, Math.ceil(Math.abs(k - maint) / 150)) / 4).toFixed(2);   // four clear steps
     const kShort = k => k >= 1000 ? `${(k / 1000).toFixed(1)}k` : String(Math.round(k));
     const kcalCell = k => `<span class="heat__kcal"><span class="k-full">${n(k)}</span><span class="k-short">${kShort(k)}</span></span>`;
+    const go = (s, said) => `<a class="heat__go" href="#${s === today ? 'today' : s}" aria-label="${esc(said)}. Show this day"></a>`;   // the whole square opens that day
 
     // whole weeks, Monday to Sunday: from the week logging started to the end of this one, 8 weeks at most
     const mon = d => { const x = date(d); x.setDate(x.getDate() - (x.getDay() + 6) % 7); return x; };
@@ -2278,9 +2303,9 @@ const renderViews = (() => {
       const s = iso(d), k = H.days[s], first = !named || d.getDate() === 1;
       named = true;
       const label = first ? `${d.getDate()}<span class="heat__mon"> ${esc(part(s, { month: 'short' }))}</span>` : String(d.getDate());
-      if (s === today && k != null) cells.push(`<li class="heat__day is-logged ${k > maint ? 'is-over' : 'is-under'} is-today" style="--t: ${tint(k)}; --i: ${i++}" title="Today: ${n(k)} kcal so far" aria-label="${esc(dLong(s))}, today, ${n(k)} kcal so far"><span class="heat__date">${label}</span>${kcalCell(k)}</li>`);
+      if (s === today && k != null) cells.push(`<li class="heat__day is-logged ${k > maint ? 'is-over' : 'is-under'} is-today" style="--t: ${tint(k)}; --i: ${i++}" title="Today: ${n(k)} kcal so far"><span class="heat__date">${label}</span>${kcalCell(k)}${go(s, `${dLong(s)}, today, ${n(k)} kcal so far`)}</li>`);
       else if (s === today) cells.push(`<li class="heat__day is-empty is-today" title="Today: nothing logged yet" aria-label="${esc(dLong(s))}, today, nothing logged yet"><span class="heat__date">${label}</span></li>`);
-      else if (k != null) cells.push(`<li class="heat__day is-logged ${k > maint ? 'is-over' : 'is-under'}" style="--t: ${tint(k)}; --i: ${i++}" title="${esc(wd(s))} ${esc(dShort(s))}: ${n(k)} kcal" aria-label="${esc(dLong(s))}, ${n(k)} kcal, ${n(Math.abs(k - maint))} ${k > maint ? 'over' : 'under'}"><span class="heat__date">${label}</span>${kcalCell(k)}</li>`);
+      else if (k != null) cells.push(`<li class="heat__day is-logged ${k > maint ? 'is-over' : 'is-under'}" style="--t: ${tint(k)}; --i: ${i++}" title="${esc(wd(s))} ${esc(dShort(s))}: ${n(k)} kcal"><span class="heat__date">${label}</span>${kcalCell(k)}${go(s, `${dLong(s)}, ${n(k)} kcal, ${n(Math.abs(k - maint))} ${k > maint ? 'over' : 'under'}`)}</li>`);
       // not logged: before logging started (a faint dot), missed (dashed), still to come (a hairline)
       else { const st = s > today ? ['future', 'still to come'] : s < startedOn ? ['before', 'before logging started'] : ['missed', 'not logged'];
         cells.push(`<li class="heat__day is-empty is-${st[0]}" aria-label="${esc(dLong(s))}, ${st[1]}"><span class="heat__date">${label}</span></li>`); }
@@ -2300,6 +2325,7 @@ const renderViews = (() => {
     const histKey = `<div class="hist-key" aria-hidden="true">
           <span class="hist-key__scale">Under<span class="hist-key__bar"></span>Over ${n(maint)}</span>
           <ul class="legend"><li><span class="legend__key legend__key--today"></span>Today, still going</li></ul>
+          <span>Click a day to see what you ate.</span>
         </div>`;
     const trendCard = `<section class="card hist-trend" aria-labelledby="trend-h">
         <div class="card__head"><h2 class="card__title" id="trend-h">Each day</h2><span class="card__aside">kcal, dashed at ${n(maint)}</span></div>
@@ -2440,7 +2466,7 @@ const renderViews = (() => {
   return model => {
     const q = s => document.querySelector(`[data-panel="${s}"]`), $ = s => document.querySelector(s);
     if (q('today')) {
-      todayPanel(q('today'), model.todayView, model.maintenance, model.today);
+      todayPanel(q('today'), model.todayView, model.maintenance, model.today);   // today, or the day picked in History
       if (!q('today')._fit) { let w = 0; q('today')._fit = new ResizeObserver(([e]) => { const nw = Math.round(e.contentRect.width); if (nw !== w) { w = nw; packTiles(); } }); q('today')._fit.observe(q('today')); }
       packTiles();
     }
@@ -2475,6 +2501,7 @@ const log = (() => {
   const EMPTY = { food: [], days: [], weight: [], settings: [] };
   let session = SEED ? null : store.get(SESSION_KEY);
   let raw = null, sig = '', state = 'off', lastAt = 0, lastErr = '', busy = false, again = false, lastTry = 0;
+  let viewDay = null;   // a past day picked in History (null: today)
   let gen = 0;   // goes up on every sign-out: a refresh that started before it must not save anything
   const changed = [], signedOut = [];
   const setState = s => { state = s; changed.forEach(f => f()); };
@@ -2519,14 +2546,17 @@ const log = (() => {
   ];
   async function read(today) {
     const get = SEED ? p => Promise.resolve(SEED.rest(p)) : p => api('GET', p);   // the test copy never fetches
-    const [food, days, weight, settings] = await Promise.all(paths(today).map(get));
-    return { food: food || [], days: days || [], weight: weight || [], settings: settings || [] };
+    // a picked day older than the week's food gets a read of its own
+    const day = viewDay && viewDay < addDays(today, -6) ? viewDay : null, ps = paths(today);
+    if (day) ps.push(`/rest/v1/calorie_food?select=id,day,meal,eaten_at,name,portion,kcal,protein_g,carbs_g,fat_g,source,icon,notes,created_at&day=eq.${day}&order=eaten_at.asc.nullslast,created_at.asc`);
+    const [food, days, weight, settings, dayRows] = await Promise.all(ps.map(get));
+    return { food: food || [], days: days || [], weight: weight || [], settings: settings || [], dayFood: day ? { day, rows: dayRows || [] } : null };
   }
   function draw(r) {
-    const today = londonToday(), s = JSON.stringify([today, r.food, r.days, r.weight, r.settings]);
+    const today = londonToday(), s = JSON.stringify([today, viewDay, r.food, r.days, r.weight, r.settings, r.dayFood]);
     if (s === sig) return;   // nothing new: leave the screens (and their grow-in animations) alone
     sig = s;
-    renderViews(buildModel(r, today));
+    renderViews(buildModel(r, today, viewDay));
   }
   async function refresh() {
     lastTry = Date.now();
@@ -2574,6 +2604,15 @@ const log = (() => {
     draw(EMPTY); setState('off');
     signedOut.forEach(f => f());
   }
+  // History picked a day (or null, back to today): draw it from what's here, and fetch its food if it's older
+  function setDay(d) {
+    const today = londonToday();
+    d = d && d < today ? d : null;
+    if (d === viewDay) return;
+    viewDay = d;
+    draw(raw || EMPTY);
+    if (d && d < addDays(today, -6) && !(raw && raw.dayFood && raw.dayFood.day === d)) refresh();
+  }
   function boot() {
     if (!SEED && session) { const c = store.get(CACHE_KEY); if (c && c.user === session.id) { raw = c; lastAt = c.at || 0; } }
     draw(raw || EMPTY);   // straight away, before any network: the saved day, or the empty screens
@@ -2586,7 +2625,7 @@ const log = (() => {
     setInterval(() => { if (!document.hidden) refresh(); }, 60e3);
   }
   return {
-    boot, refresh, signIn, signOut,
+    boot, refresh, signIn, signOut, setDay,
     info: () => ({ state, lastAt, lastErr, email: session?.email || '' }),
     onChange: f => changed.push(f), onSignedOut: f => signedOut.push(f),
   };
@@ -2604,11 +2643,15 @@ const views = (() => {
   const ccWeightMods = [...document.querySelectorAll('.cc-weight, .cc-maint')];
   const still = matchMedia('(prefers-reduced-motion: reduce)');
   let current = null;
-  function show(name, { scroll = true } = {}) {
-    if (!panels[name]) name = 'today';
-    if (name === current) return;
-    current = name;
-    rows.forEach(r => r.dataset.view === name ? r.setAttribute('aria-current', 'page') : r.removeAttribute('aria-current'));
+  // A date (#2026-11-08, from a square in History) is that day on the Today screen, with History still lit.
+  function show(key, { scroll = true } = {}) {
+    const day = /^\d{4}-\d\d-\d\d$/.test(key) && key < londonToday() ? key : null;
+    if (!day && !panels[key]) key = 'today';
+    if (key === current) return;
+    current = key;
+    const name = day ? 'today' : key, lit = day ? 'history' : key;
+    log.setDay(day);
+    rows.forEach(r => r.dataset.view === lit ? r.setAttribute('aria-current', 'page') : r.removeAttribute('aria-current'));
     for (const [k, p] of Object.entries(panels)) {
       p.hidden = k !== name;
       p.classList.remove('view-in');
@@ -2622,12 +2665,13 @@ const views = (() => {
     // the same for Weight: the pane already shows the weight and maintenance, so their modules leave too
     if (ccWeightMods.length && ccWeightMods[0].hidden !== (name === 'weight')) { ccWeightMods.forEach(m => { m.hidden = name === 'weight'; }); glass.soon?.(); }
     if (scroll && scroller) scroller.scrollTop = 0;
-    const want = name === 'today' ? location.pathname + location.search : '#' + name;
-    if ((location.hash || '') !== (name === 'today' ? '' : '#' + name)) history.replaceState(null, '', want);
+    const want = key === 'today' ? location.pathname + location.search : '#' + key;
+    if ((location.hash || '') !== (key === 'today' ? '' : '#' + key)) history.replaceState(null, '', want);
   }
   Object.values(panels).forEach(p => p.addEventListener('animationend', e => { if (e.target === p) p.classList.remove('view-in'); }));
   rows.forEach(r => r.addEventListener('click', () => show(r.dataset.view)));
-  document.querySelector('.dock')?.addEventListener('click', e => { if (e.target.closest('[data-meal]')) show('today', { scroll: false }); }, true);
+  // the Dock is the meals of the day on screen: it only has to bring Today back from the other views
+  document.querySelector('.dock')?.addEventListener('click', e => { if (e.target.closest('[data-meal]') && panels.today?.hidden) show('today', { scroll: false }); }, true);
   addEventListener('hashchange', () => show(location.hash.slice(1)));
   current = 'today';
   const start = location.hash.slice(1);
