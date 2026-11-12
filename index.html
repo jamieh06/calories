@@ -1102,6 +1102,9 @@ section.cc-mod:active { transform: none; }
 .app-icon--snacks { --c: var(--c-snacks); }
 .app-icon--dinner { --c: var(--c-dinner); }
 .app-icon--drinks { --c: var(--c-drinks); }
+.app-icon--home { --c: #2f6fe0; }   /* back to the Home desktop (jamieh06.github.io/home) */
+.dock__sep { width: 1px; height: 46px; margin: 0 5px; background: var(--dock-sep); list-style: none; }
+@media (max-width: 640px) { .dock__sep { height: 30px; margin: 0 3px; } }
 .app-icon .g-tint { fill: color-mix(in srgb, var(--c) 42%, #fff); }   /* the drink in the glass */
 .dock__badge {
   position: absolute;
@@ -1610,7 +1613,13 @@ html:has(.signin[open]) body { overflow: hidden; }
 </main>
 
 <!-- Dock: one icon per meal, badges count what's logged -->
-<ul class="dock" aria-label="Meals" style="--dock-n: 4"></ul>
+<ul class="dock" aria-label="Meals" style="--dock-n: 5">
+  <li class="dock__item dock__home">
+    <a class="dock__btn" href="../home/" aria-label="Home"><span class="app-icon app-icon--home"><svg viewBox="0 0 40 40" aria-hidden="true"><rect class="g-main" x="9.5" y="7" width="9.8" height="9.8" rx="2.6"/><rect class="g-main" x="20.7" y="7" width="9.8" height="9.8" rx="2.6"/><rect class="g-main" x="9.5" y="18.2" width="9.8" height="9.8" rx="2.6"/><rect class="g-sub" x="20.7" y="18.2" width="9.8" height="9.8" rx="2.6"/><rect class="g-main" x="11.5" y="31" width="17" height="2.6" rx="1.3"/></svg></span></a>
+    <span class="dock__label">Home</span>
+  </li>
+  <li class="dock__sep" aria-hidden="true"></li>
+</ul>
 
 <!-- Sign In: the Edit Controls glass, shown when there's no session. Same Planner account as the To Do app. -->
 <dialog class="signin" id="signin" aria-labelledby="signin-h">
@@ -2141,12 +2150,13 @@ const renderViews = (() => {
   /* the Dock: one icon per meal (Drinks only on a day with drinks), badges count what's logged */
   function dock(el, T) {
     const ms = T.meals.filter(m => m.meal !== 'drinks' || m.items.length);
-    el.style.setProperty('--dock-n', ms.length);
-    el.innerHTML = ms.map(m => `
+    el.style.setProperty('--dock-n', ms.length + 1);   // + Home, which stays first
+    el.querySelectorAll('.dock__item:not(.dock__home)').forEach(n => n.remove());
+    el.insertAdjacentHTML('beforeend', ms.map(m => `
   <li class="dock__item">
     <button class="dock__btn" data-meal="${m.meal}" aria-label="${MEAL_NAME[m.meal]}, ${m.items.length ? plural(m.items.length, 'item') : 'nothing yet'}"><span class="app-icon app-icon--${m.meal}"><svg viewBox="0 0 40 40" aria-hidden="true">${DOCK_ICONS[m.meal]}</svg></span>${m.items.length ? `<span class="dock__badge" aria-hidden="true">${m.items.length}</span>` : ''}</button>
     <span class="dock__label">${MEAL_NAME[m.meal]}</span>
-  </li>`).join('');
+  </li>`).join(''));
   }
 
   function week(el, W, maint, today) {
